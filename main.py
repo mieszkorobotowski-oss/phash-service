@@ -41,10 +41,14 @@ async def get_phash(request: Request):
 
     # SCENARIUSZ A: Plik binarny przesłany z n8n jako Form-Data (pole 'image' lub 'file')
     if "multipart/form-data" in content_type:
-        form = await request.form()
-        upload = form.get("image") or form.get("file")
+form = await request.form()
+        upload = (
+            form.get("image")
+            or form.get("file")
+            or next((val for val in form.values() if hasattr(val, "read")), None)
+        )
 
-        if not upload or not isinstance(upload, UploadFile):
+        if not upload or not hasattr(upload, "read"):
             raise HTTPException(
                 status_code=400,
                 detail="Nie znaleziono pliku binarnego w polu 'image' ani 'file'."
