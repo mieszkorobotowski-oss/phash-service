@@ -1,31 +1,77 @@
 import io
 import requests
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from PIL import Image
 import imagehash
+from PIL import Image
+from fastapi import FastAPI, HTTPException, Request, UploadFile
 
-app = FastAPI(title="pHash Microservice")
+app = FastAPI(title="Empco pHash API")
 
-class HashRequest(BaseModel):
-    image_url: str
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "image/jpeg,image/png,image/webp,*/*;q=0.8",
+    "Referer": "https://www.sklepbaterie.pl/"
+}
+
+
+def compute_phash_from_bytes(image_bytes: bytes) -> str:
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            # Konwersja palet kolorów i kanału alfa (PNG/WebP) do standardowego RGB
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                alpha_img = img.convert("RGBA")
+                background.paste(alpha_img, mask=alpha_img.split()[3])
+                img = background
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+
+            return str(imagehash.phash(img))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Błąd przetwarzania obrazu: {str(exc)}")
+
+
+@app.get("/")
+def health_check():
+    return {"status": "ok"}
+
 
 @app.post("/phash")
-def get_phash(data: HashRequest):
+async def get_phash(request: Request):
+    content_type = request.headers.get("content-type", "").lower()
+
+    # SCENARIUSZ A: Plik binarny przesłany z n8n jako Form-Data (pole 'image' lub 'file')
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        upload = form.get("image") or form.get("file")
+
+        if not upload or not isinstance(upload, UploadFile):
+            raise HTTPException(
+                status_code=400,
+                detail="Nie znaleziono pliku binarnego w polu 'image' ani 'file'."
+            )
+
+        image_bytes = await upload.read()
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="Przesłany plik jest pusty.")
+
+        phash_value = compute_phash_from_bytes(image_bytes)
+        return {"phash": phash_value, "filename": upload.filename}
+
+    # SCENARIUSZ B: Kompatybilność wsteczna dla zapytań JSON {"image_url": "..."}
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        }
-        response = requests.get(data.image_url, headers=headers, timeout=10)
-        response.raise_for_status()
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Nieprawidłowy format żądania (oczekiwano Form-Data lub JSON).")
 
-        image = Image.open(io.BytesIO(response.content))
-        calculated_hash = str(imagehash.phash(image))
+    image_url = payload.get("image_url") if isinstance(payload, dict) else None
+    if not image_url:
+        raise HTTPException(status_code=400, detail="Brak pola 'image_url' w treści JSON.")
 
-        return {"phash": calculated_hash}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Blad przetwarzania: {str(e)}")
+    try:
+        resp = requests.get(image_url, headers=BROWSER_HEADERS, timeout=15)
+        resp.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Nie udało się pobrać obrazu z URL: {str(exc)}")
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+    phash_value = compute_phash_from_bytes(resp.content)
+    return {"phash": phash_value, "image_url": image_url}
