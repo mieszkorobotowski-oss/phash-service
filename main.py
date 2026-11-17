@@ -2,7 +2,7 @@ import io
 import requests
 import imagehash
 from PIL import Image
-from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 
 app = FastAPI(title="Empco pHash API")
 
@@ -41,7 +41,7 @@ async def get_phash(request: Request):
 
     # SCENARIUSZ A: Plik binarny przesłany z n8n jako Form-Data (pole 'image' lub 'file')
     if "multipart/form-data" in content_type:
-form = await request.form()
+        form = await request.form()
         upload = (
             form.get("image")
             or form.get("file")
@@ -59,7 +59,7 @@ form = await request.form()
             raise HTTPException(status_code=400, detail="Przesłany plik jest pusty.")
 
         phash_value = compute_phash_from_bytes(image_bytes)
-        return {"phash": phash_value, "filename": upload.filename}
+        return {"phash": phash_value, "filename": getattr(upload, "filename", "uploaded_image")}
 
     # SCENARIUSZ B: Kompatybilność wsteczna dla zapytań JSON {"image_url": "..."}
     try:
