@@ -16,6 +16,9 @@ BROWSER_HEADERS = {
 def compute_phash_from_bytes(image_bytes: bytes) -> str:
     try:
         with Image.open(io.BytesIO(image_bytes)) as img:
+            # Natychmiastowe zmniejszenie dużych grafik przed alokacją tła w RAM
+            img.thumbnail((256, 256))
+
             # Konwersja palet kolorów i kanału alfa (PNG/WebP) do standardowego RGB
             if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
                 background = Image.new("RGB", img.size, (255, 255, 255))
@@ -28,7 +31,6 @@ def compute_phash_from_bytes(image_bytes: bytes) -> str:
             return str(imagehash.phash(img))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Błąd przetwarzania obrazu: {str(exc)}")
-
 
 @app.get("/")
 def health_check():
